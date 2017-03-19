@@ -1,48 +1,104 @@
-# Based on .travis.yml from https://github.com/philsquared/Catch
+# Taken from https://github.com/google/benchmark/blob/master/.travis.yml
 
 sudo: required
 dist: trusty
 language: cpp
 
+env:
+  global:
+    - /usr/local/bin:$PATH
+
+# NOTE: The COMPILER variable is unused. It simply makes the display on
+# travis-ci.org more readable.
 matrix:
-  include:
+    include:
+        - compiler: gcc
+          addons:
+            apt:
+              packages:
+                - lcov
+          env: COMPILER=g++ C_COMPILER=gcc       BUILD_TYPE=Coverage
+        - compiler: gcc
+          env: COMPILER=g++ C_COMPILER=gcc       BUILD_TYPE=Debug
+        - compiler: gcc
+          env: COMPILER=g++ C_COMPILER=gcc       BUILD_TYPE=Release
+        - compiler: gcc
+          addons:
+            apt:
+              sources:
+                - ubuntu-toolchain-r-test
+              packages:
+                - g++-6
+          env:
+            - COMPILER=g++-6 C_COMPILER=gcc-6  BUILD_TYPE=Debug
+            - EXTRA_FLAGS="-fno-omit-frame-pointer -g -O2 -fsanitize=undefined,address -fuse-ld=gold"
+        - compiler: clang
+          env: COMPILER=clang++ C_COMPILER=clang BUILD_TYPE=Debug
+        - compiler: clang
+          env: COMPILER=clang++ C_COMPILER=clang BUILD_TYPE=Release
+        # Clang w/ libc++
+        - compiler: clang
+          addons:
+            apt:
+              packages:
+                clang-3.8
+          env:
+            - COMPILER=clang++-3.8 C_COMPILER=clang-3.8 BUILD_TYPE=Debug
+            - LIBCXX_BUILD=1
+            - EXTRA_FLAGS="-stdlib=libc++"
+        # Clang w/ libc++, ASAN, UBSAN
+        - compiler: clang
+          addons:
+            apt:
+              packages:
+                clang-3.8
+          env:
+            - COMPILER=clang++-3.8 C_COMPILER=clang-3.8 BUILD_TYPE=Debug
+            - LIBCXX_BUILD=1 LIBCXX_SANITIZER="Undefined;Address"
+            - EXTRA_FLAGS="-stdlib=libc++ -fno-omit-frame-pointer -g -O2 -fsanitize=undefined,address -fno-sanitize-recover=all"
+            - UBSAN_OPTIONS=print_stacktrace=1
+        # Clang w/ libc++ and MSAN
+        - compiler: clang
+          addons:
+            apt:
+              packages:
+                clang-3.8
+          env:
+            - COMPILER=clang++-3.8 C_COMPILER=clang-3.8 BUILD_TYPE=Debug
+            - LIBCXX_BUILD=1 LIBCXX_SANITIZER=MemoryWithOrigins
+            - EXTRA_FLAGS="-stdlib=libc++ -g -O2 -fno-omit-frame-pointer -fsanitize=memory -fsanitize-memory-track-origins"
+        # Clang w/ libc++ and MSAN
+        - compiler: clang
+          addons:
+            apt:
+              packages:
+                clang-3.8
+          env:
+            - COMPILER=clang++-3.8 C_COMPILER=clang-3.8 BUILD_TYPE=RelWithDebInfo
+            - LIBCXX_BUILD=1 LIBCXX_SANITIZER=Thread
+            - EXTRA_FLAGS="-stdlib=libc++ -g -O2 -fno-omit-frame-pointer -fsanitize=thread -fno-sanitize-recover=all"
 
-    # 1/ Linux Clang Builds
-    - os: linux
-      compiler: clang
-      addons: &clang38
-        apt:
-          sources: ['llvm-toolchain-precise-3.8', 'ubuntu-toolchain-r-test']
-          packages: ['g++-5, clang-3.8']
-      env: COMPILER='clang++-3.8'
-
-    # 2/ Linux GCC Builds
-    - os: linux
-      compiler: gcc
-      addons: &gcc5
-        apt:
-          sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-5']
-      env: COMPILER='g++-5'
+before_script:
+    - if [ -n "${LIBCXX_BUILD}" ]; then
+        source .travis-libcxx-setup.sh;
+      fi
+    - mkdir build && cd build
 
 install:
-  - DEPS_DIR="${TRAVIS_BUILD_DIR}/deps"
-  - mkdir ${DEPS_DIR} && cd ${DEPS_DIR}
-  - |
-    if [[ "${TRAVIS_OS_NAME}" == "linux" ]]; then
-      CMAKE_URL="http://www.cmake.org/files/v3.3/cmake-3.3.2-Linux-x86_64.tar.gz"
-      mkdir cmake && travis_retry wget --no-check-certificate --quiet -O - ${CMAKE_URL} | tar --strip-components=1 -xz -C cmake
-      export PATH=${DEPS_DIR}/cmake/bin:${PATH}
-      # We need clang to find the modern C++ libraries installed by g++-5 as g++-4.3 standard libraries don't work in C++14 mode.
-      sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-5 60;
-      sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-5 60;
-      sudo update-alternatives --config gcc;
-      sudo update-alternatives --config g++;
-    elif [[ "${TRAVIS_OS_NAME}" == "osx" ]]; then
-      brew install cmake
+  - if [ "${BUILD_TYPE}" == "Coverage" -a "${TRAVIS_OS_NAME}" == "linux" ]; then
+      PATH=~/.local/bin:${PATH};
+      pip install --user --upgrade pip;
+      pip install --user cpp-coveralls;
     fi
-  - cd ${TRAVIS_BUILD_DIR}
 
-before_script: export CXX=${COMPILER}
+script:
+    - cmake -DCMAKE_C_COMPILER=${C_COMPILER} -DCMAKE_CXX_COMPILER=${COMPILER} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_CXX_FLAGS="${EXTRA_FLAGS}" ..
+    - make
+    - make CTEST_OUTPUT_ON_FAILURE=1 test
 
-script: ${TRAVIS_BUILD_DIR}/scripts/build.py -t
+after_success:
+  - if [ "${BUILD_TYPE}" == "Coverage" -a "${TRAVIS_OS_NAME}" == "linux" ]; then
+      coveralls --include src --include include --gcov-options '\-lp' --root .. --build-root .;
+    fi
+
+sudo: required
